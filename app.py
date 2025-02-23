@@ -18,10 +18,12 @@ load_dotenv()
 
 # Set Llama API key (store it in an environment variable)
 LLAMA_API_KEY = os.getenv("LLAMA_API_KEY")
+if not LLAMA_API_KEY:
+    raise ValueError("LLAMA_API_KEY is not set in the .env file.")
 
 # Flask configuration
-app.config['SECRET_KEY'] = 'your_secret_key'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///appointments.db'
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "fallback_secret_key")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URI", "sqlite:///appointments.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize the database
@@ -129,8 +131,8 @@ def book():
         try:
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
             appointment_time = datetime.strptime(time_str, '%H:%M').time()
-        except ValueError:
-            flash('Invalid date or time format. Please use the correct format.', 'danger')
+        except ValueError as e:
+            flash(f'Invalid date or time format: {e}. Please use the correct format.', 'danger')
             return redirect(url_for('book'))
 
         # Validate day of the week (Monday to Friday)
@@ -179,52 +181,57 @@ def chatbot():
     if request.method == 'POST':
         user_message = request.json.get('message', '')
 
+        # Load PDF content
+        pdf_text = extract_text_from_pdf("LAW.pdf")
+        if not pdf_text:
+            return jsonify({"error": "Failed to load PDF content"}), 500
+
+        # Debugging: Print extracted PDF text
+        print("Extracted PDF Text (First 500 chars):", pdf_text[:500])
+
         # Query Llama API with PDF content as context
         try:
             response = requests.post(
-                "https://api.llama.ai/chat",  # Example endpoint (replace with actual Llama API URL)
+                "https://api.llama.ai/chat",  # Replace with actual endpoint
                 json={
-                    "model": "llama-model",  # Replace with the correct model if necessary
+                    "model": "llama-model",  # Replace with actual model
                     "messages": [
                         {"role": "system", "content": "You are a chatbot that only answers questions based on the provided legal document."},
                         {"role": "user", "content": f"Here is the legal document excerpt: {pdf_text[:3000]}..."},
                         {"role": "user", "content": user_message}
                     ]
                 },
-                headers={"Authorization": f"Bearer {LLAMA_API_KEY}"}
+                headers={"Authorization": f"Bearer {LLAMA_API_KEY}"},
+                timeout=10  # Add timeout to avoid hanging
             )
-
+            response.raise_for_status()  # Raise an error for bad status codes
             response_data = response.json()
+            print("API Response:", response_data)  # Debugging: Print the API response
             reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', 'Sorry, I couldn\'t understand.')
-            return jsonify({"reply": reply})
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             print(f"Error reaching Llama API: {e}")
-            return jsonify({"error": "Could not reach the chatbot"}), 500
+            print(f"Response Status Code: {e.response.status_code if e.response else 'No response'}")
+            print(f"Response Text: {e.response.text if e.response else 'No response text'}")
+            reply = "Sorry, I couldn't process your request at the moment."
+
+        return jsonify({"reply": reply})
 
     return render_template('chatbot.html')
 
 # Load PDF and extract text
 def extract_text_from_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    text = ""
-    for page in doc:
-        text += page.get_text("text") + "\n"
-    return text
-
-# Load extracted PDF content from "LAW.pdf"
-pdf_text = extract_text_from_pdf("LAW.pdf")
-
-from dotenv import load_dotenv
-import os
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Debugging: Print the loaded LLAMA_API_KEY to confirm it's set correctly
-print("LLAMA_API_KEY:", os.getenv("LLAMA_API_KEY"))
-
+    try:
+        doc = fitz.open(pdf_path)
+        text = ""
+        for page in doc:
+            text += page.get_text("text") + "\n"
+        return text
+    except Exception as e:
+        print(f"Error reading PDF: {e}")
+        return ""
 
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all()  # Ensure database is created
+        if not os.path.exists('instance/appointments.db'):  # Check if DB exists
+            db.create_all()  # Create database if it doesn't exist
     app.run(debug=True)
