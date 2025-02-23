@@ -5,18 +5,24 @@ from datetime import datetime, time
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import fitz  # PyMuPDF
-import openai
+import requests
 import os
+from dotenv import load_dotenv
 
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Allow frontend to access this backend
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Set Llama API key (store it in an environment variable)
+LLAMA_API_KEY = os.getenv("LLAMA_API_KEY")
+
+# Flask configuration
 app.config['SECRET_KEY'] = 'your_secret_key'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///appointments.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Set OpenAI API key
-openai.api_key = "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"
 
 # Initialize the database
 db = SQLAlchemy(app)
@@ -173,21 +179,26 @@ def chatbot():
     if request.method == 'POST':
         user_message = request.json.get('message', '')
 
-        # Query OpenAI with PDF content as context
+        # Query Llama API with PDF content as context
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a chatbot that only answers questions based on the provided legal document."},
-                    {"role": "user", "content": f"Here is the legal document excerpt: {pdf_text[:3000]}..."},
-                    {"role": "user", "content": user_message}
-                ]
+            response = requests.post(
+                "https://api.llama.ai/chat",  # Example endpoint (replace with actual Llama API URL)
+                json={
+                    "model": "llama-model",  # Replace with the correct model if necessary
+                    "messages": [
+                        {"role": "system", "content": "You are a chatbot that only answers questions based on the provided legal document."},
+                        {"role": "user", "content": f"Here is the legal document excerpt: {pdf_text[:3000]}..."},
+                        {"role": "user", "content": user_message}
+                    ]
+                },
+                headers={"Authorization": f"Bearer {LLAMA_API_KEY}"}
             )
 
-            reply = response['choices'][0]['message']['content']
+            response_data = response.json()
+            reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', 'Sorry, I couldn\'t understand.')
             return jsonify({"reply": reply})
         except Exception as e:
-            print(f"Error reaching OpenAI API: {e}")
+            print(f"Error reaching Llama API: {e}")
             return jsonify({"error": "Could not reach the chatbot"}), 500
 
     return render_template('chatbot.html')
@@ -202,6 +213,16 @@ def extract_text_from_pdf(pdf_path):
 
 # Load extracted PDF content from "LAW.pdf"
 pdf_text = extract_text_from_pdf("LAW.pdf")
+
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Debugging: Print the loaded LLAMA_API_KEY to confirm it's set correctly
+print("LLAMA_API_KEY:", os.getenv("LLAMA_API_KEY"))
+
 
 if __name__ == '__main__':
     with app.app_context():
